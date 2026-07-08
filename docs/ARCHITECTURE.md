@@ -2,9 +2,12 @@
 
 Architecture & implementation plan.
 
-> Status: **Phase 1 in progress.** The portable application core (state machine, audio
-> ring buffer, power/sleep abstraction, session runner) is implemented as **host‑testable
-> C** with a passing local test suite. Firmware/server glue follows the roadmap in §11.
+> Status: **Phases 1–2 implemented.** The portable core (state machine, ring buffer,
+> power/sleep abstraction, session runner) **plus the numeric wake‑word stack** (int8
+> TFLite‑compatible quant/kernels, radix‑2 FFT, log‑mel front‑end, MLP forward + wake
+> decision) are implemented as **host‑testable C** with a passing local suite (9 suites).
+> A host **WAV simulator** runs the exact device DSP over real audio. Firmware/server glue
+> and trained weights follow the roadmap in §11.
 
 ### Confirmed build constraints (from user)
 
@@ -530,8 +533,34 @@ States: `BOOT, CONFIRM_KWS, CONNECT, STREAM, SLEEP, ERROR`.
   through the mock power backend and asserted step by step).
 - `make test` (top‑level) configures + builds + runs all suites; all must pass.
 
-### 13.4 Deferred to later phases
+### 13.4 Phase 2 — wake‑word numeric stack (implemented)
 
-I²S/DSP/KWS numerics, Wi‑Fi, HTTP streaming, and the ESP‑IDF build are stubbed behind the
-injected hooks so the control flow is provably correct before hardware‑specific code lands.
+Added to `firmware/core/`, all pure/portable and host‑tested:
+
+| Module | Files | Responsibility |
+|---|---|---|
+| `nn/quant` | `nn/quant.c` + `include/core/nn/quant.h` | TFLite/gemmlowp‑compatible fixed‑point requantization (`QuantizeMultiplier`, saturating‑rounding‑doubling‑high‑mul, rounding divide‑by‑POT) so off‑device quantization matches on‑device bit‑for‑bit |
+| `nn/kernels` | `nn/kernels.c` | int8 kernels: fully‑connected, conv2d, depthwise‑conv2d, global avg‑pool, argmax, float softmax (NHWC, symmetric weights, per‑channel requant) |
+| `dsp/fft` | `dsp/fft.c` | in‑place iterative radix‑2 FFT (forward/inverse) |
+| `dsp/melspec` | `dsp/melspec.c` | log‑mel front‑end: pre‑emphasis → Hann → FFT → power → triangular HTK mel filterbank → log; fixed buffers, no malloc |
+| `kws` | `kws.c` + `include/core/kws.h` | int8 2‑layer MLP forward (built from the kernels) + `kws_decide` wake/no‑wake decision (dequantize → softmax → argmax → threshold) |
+
+Host tooling (`tools/host/`, not compiled into firmware):
+
+- `wav.c` — minimal 16‑bit PCM WAV read/write.
+- `wav_simulate` — runs the **exact device log‑mel pipeline** over a WAV and prints an
+  ASCII spectrogram; verified on a 300→3000 Hz sweep (clean diagonal ridge).
+
+New test suites (9 total, all passing): `test_quant`, `test_kernels`, `test_dsp`,
+`test_kws`, `test_wav`. Kernels/quant are validated against hand‑computed reference values;
+DSP against analytic FFT cases (impulse/DC/Nyquist/roundtrip) and tone‑band localisation;
+KWS with a hand‑built identity MLP whose outputs are exactly predictable — the
+"hand‑checked weights" parity baseline before real training.
+
+### 13.5 Deferred to later phases
+
+Trained DS‑CNN weights + codegen (Phase 3, training framework), Wi‑Fi, HTTP streaming, and
+the ESP‑IDF hardware build remain stubbed behind the injected hooks so the control flow and
+numerics are provably correct before hardware‑specific code lands. The C↔Python bit‑exact
+parity check is enabled by the TFLite‑compatible `nn/quant` math added here.
 

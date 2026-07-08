@@ -5,6 +5,11 @@ idf_component_register(
         "src/power.c"
         "src/fsm.c"
         "src/app.c"
+        "src/nn/quant.c"
+        "src/nn/kernels.c"
+        "src/dsp/fft.c"
+        "src/dsp/melspec.c"
+        "src/kws.c"
     INCLUDE_DIRS
         "include"
 )

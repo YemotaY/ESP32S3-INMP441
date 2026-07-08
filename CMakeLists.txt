@@ -20,7 +20,14 @@ add_library(core STATIC
     firmware/core/src/power.c
     firmware/core/src/fsm.c
     firmware/core/src/app.c
+    firmware/core/src/nn/quant.c
+    firmware/core/src/nn/kernels.c
+    firmware/core/src/dsp/fft.c
+    firmware/core/src/dsp/melspec.c
+    firmware/core/src/kws.c
 )
 target_include_directories(core PUBLIC firmware/core/include)
+target_link_libraries(core PUBLIC m)
 
+add_subdirectory(tools/host)
 add_subdirectory(tests/host)
