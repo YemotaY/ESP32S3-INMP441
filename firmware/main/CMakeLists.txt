@@ -1,0 +1,14 @@
+idf_component_register(
+    SRCS
+        "app_main.c"
+        "../port/esp/power_esp.c"
+    INCLUDE_DIRS
+        "."
+        "../port/esp"
+    REQUIRES
+        core
+        esp_driver_gpio
+        esp_hw_support
+        esp_timer
+        freertos
+)

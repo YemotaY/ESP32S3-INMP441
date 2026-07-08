@@ -1,0 +1,20 @@
+# Common defaults for the SimonSays firmware (no-PSRAM board is the default target).
+# PSRAM variants: additionally apply sdkconfig.psram (see firmware/README.md).
+
+CONFIG_IDF_TARGET="esp32s3"
+
+# 4 MB flash Super Mini
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="4MB"
+
+# Custom partition table (see partitions.csv)
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# Super Mini exposes the native USB Serial/JTAG for console + flashing
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+
+# Default logging
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+
+# No PSRAM on the default board: SPIRAM intentionally left disabled.

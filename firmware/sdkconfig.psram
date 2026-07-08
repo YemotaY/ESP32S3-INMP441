@@ -1,0 +1,8 @@
+# Overlay for ESP32-S3 boards that DO have PSRAM (e.g. the ...R2 / FH4R2 variant).
+# Apply on top of sdkconfig.defaults:
+#   idf.py -C firmware -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.psram" build
+
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_QUAD=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_SPIRAM_USE_MALLOC=y
