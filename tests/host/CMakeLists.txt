@@ -17,6 +17,29 @@ add_executable(test_wav test_wav.c)
 target_link_libraries(test_wav PRIVATE core testsupport wavtool)
 add_test(NAME test_wav COMMAND test_wav)
 
+# Streaming protocol + client (portable core only).
+foreach(suite test_stream_proto test_stream_client)
+    add_executable(${suite} ${suite}.c)
+    target_link_libraries(${suite} PRIVATE core testsupport)
+    add_test(NAME ${suite} COMMAND ${suite})
+endforeach()
+
+# Server logic suites (serverlib + core).
+foreach(suite test_http_ingest test_intent test_debounce test_session)
+    add_executable(${suite} ${suite}.c)
+    target_link_libraries(${suite} PRIVATE core serverlib testsupport)
+    add_test(NAME ${suite} COMMAND ${suite})
+endforeach()
+
+# End-to-end loopback: real sockets + threads, portable client vs serverlib.
+find_package(Threads)
+if(Threads_FOUND)
+    add_executable(test_server_e2e test_server_e2e.c)
+    target_link_libraries(test_server_e2e
+        PRIVATE core serverlib nettool testsupport Threads::Threads)
+    add_test(NAME test_server_e2e COMMAND test_server_e2e)
+endif()
+
 # C<->Python parity: runs the committed golden fixture through the C engine.
 add_executable(test_parity test_parity.c)
 target_include_directories(test_parity PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/generated)
