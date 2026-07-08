@@ -1,0 +1,32 @@
+# ESP-IDF SDK vendored in-tree keeps its own git history — do not track it here.
+/esp/esp-idf/
+
+# Build outputs
+/build/
+build/
+/firmware/build/
+*.o
+*.a
+*.elf
+*.bin
+*.map
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CTestTestfile.cmake
+Testing/
+compile_commands.json
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# ESP-IDF project artifacts
+sdkconfig
+sdkconfig.old
+dependencies.lock
+managed_components/
