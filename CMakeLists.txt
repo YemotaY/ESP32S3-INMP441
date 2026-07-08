@@ -26,9 +26,12 @@ add_library(core STATIC
     firmware/core/src/dsp/melspec.c
     firmware/core/src/kws.c
     firmware/core/src/kws_model.c
+    firmware/core/src/net/stream_proto.c
+    firmware/core/src/net/stream_client.c
 )
 target_include_directories(core PUBLIC firmware/core/include)
 target_link_libraries(core PUBLIC m)
 
+add_subdirectory(server)
 add_subdirectory(tools/host)
 add_subdirectory(tests/host)
