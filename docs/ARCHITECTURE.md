@@ -2,15 +2,18 @@
 
 Architecture & implementation plan.
 
-> Status: **Phases 1–3 implemented.** The portable core (state machine, ring buffer,
+> Status: **Phases 1–4 implemented.** The portable core (state machine, ring buffer,
 > power/sleep abstraction, session runner), the numeric wake‑word stack (int8
 > TFLite‑compatible quant/kernels, radix‑2 FFT, log‑mel front‑end, DS‑CNN forward + wake
-> decision), **and the off‑device training/quantization/codegen framework** are
-> implemented as **host‑testable code** with a passing local suite (15 suites: 10 C, 5
-> Python). A host **WAV simulator** runs the exact device DSP over real audio, and a
-> committed **C↔Python parity fixture** proves the on‑device C engine reproduces the
-> off‑device Python int8 reference **bit‑for‑bit**. Firmware/server glue and real trained
-> weights follow the roadmap in §11.
+> decision), the off‑device training/quantization/codegen framework, **and the full
+> streaming loop (chunked‑HTTP client + socket server with VAD/STT/intent/debounce
+> connection‑cut)** are implemented as **host‑testable code** with a passing local suite
+> (22 suites: 17 C, 5 Python). A host **WAV simulator** runs the exact device DSP over
+> real audio, a committed **C↔Python parity fixture** proves the on‑device C engine
+> reproduces the off‑device Python int8 reference **bit‑for‑bit**, and an **end‑to‑end
+> loopback test** drives the portable streaming client over a real TCP socket into the
+> server and asserts the wake→stream→cut loop. Real trained weights and on‑device
+> Wi‑Fi/socket/mic glue follow the roadmap in §11.
 
 ### Confirmed build constraints (from user)
 
@@ -611,11 +614,59 @@ semantics exactly and share the same layer order/zero‑point/requant scheme as
 function*. The committed fixture makes this a standing regression guard with no Python
 needed at C build time.
 
-### 13.6 Deferred to later phases
+### 13.6 Phase 4 — streaming loop: client + server + connection‑cut (implemented)
 
-Real recorded datasets, Wi‑Fi, HTTP audio streaming, the server intention detector, and
-the ESP‑IDF hardware build remain stubbed behind the injected hooks so the control flow and
-numerics are provably correct before hardware‑specific code lands. The training framework
-(Phase 3) produces deployable int8 weights today; wiring a trained `kws_model_data.h` into
-`app_main` and capturing real audio are the remaining integration steps.
+The full **wake → stream → cut → sleep** loop, implemented host‑testable end to end. The
+device‑side framing is portable core code; the server is a tiny host Linux program (real
+POSIX sockets, since it is never the firmware).
+
+Portable client engine (added to `firmware/core/`, host‑tested):
+
+| Module | Files | Responsibility |
+|---|---|---|
+| `stream_proto` | `src/net/stream_proto.c` + `include/core/net/stream_proto.h` | Pure chunked‑HTTP/1.1 framing codec — build the POST request header (with `X-SimonSays-Session` / `X-SimonSays-Wake-Conf`), encode a `<hexlen>\r\n<payload>\r\n` chunk, and the `0\r\n\r\n` terminator. No malloc, no sockets. |
+| `stream_client` | `src/net/stream_client.c` + `include/core/net/stream_client.h` | Streaming session over an **injected** `stream_transport_t` (all‑or‑error `send`, non‑blocking `recv` → `STREAM_WOULDBLOCK`) and `pcm_source_t` (`read` returns 0 at end of speech). Sends the header, polls for a server close before each frame, streams chunks, sends the terminator on end‑of‑speech, then drains until the server cuts. Returns `FSM_EV_SERVER_CLOSED` / `FSM_EV_SESSION_TIMEOUT` / `FSM_EV_ERROR`. Caller supplies one scratch buffer (header at the head, PCM frame at the tail — non‑overlapping). |
+
+Server (`server/`, a standalone host program — `serverlib` static lib + `simonsays-server`):
+
+| Module | Responsibility |
+|---|---|
+| `http_ingest` | Incremental, push‑bytes HTTP/1.1 chunked‑POST parser (request line → headers → chunk size → chunk data → trailer). Emits payload via callback; extracts session id + wake‑confidence headers (case‑insensitive). Byte‑at‑a‑time safe. |
+| `vad` | Energy‑based voice‑activity gate (mean absolute amplitude threshold). |
+| `stt` + `stt_stub` | Pluggable STT interface (`reset`/`feed`/`poll`) — the **whisper.cpp replacement point**. The stub does VAD segmentation and emits scripted transcripts per detected utterance, so the whole loop is deterministically testable with no model. |
+| `intent` | Allocation‑free keyword→intent matcher (case‑insensitive substring; all space‑separated keywords must be present; first entry wins). |
+| `debounce` | The **connection‑cut state machine**: `LISTENING → WAITING → CUT`, latching a `cut_reason_t` (`DEBOUNCE` after a command + quiet window, `MAX_SESSION`, or `SILENCE`). Wrap‑safe elapsed‑time math, explicit `now_ms` for deterministic tests. |
+| `session` | Orchestrator: decode little‑endian int16 PCM → VAD energy → `debounce_note_speech`, feed STT, poll transcripts → `intent_match` → `debounce_note_command`; `session_tick` asks the debounce whether to cut. |
+| `config` | Shared default intent table (`light on` / `light off` / `stop`) and session tuning. |
+| `main.c` | Thin POSIX `accept` loop: `SO_RCVTIMEO` so it ticks during silence, feeds `http_ingest` → `session`, and on cut sends a small JSON response and closes the socket. STT scripted via `--script` for demos. |
+
+Host tooling (`tools/host/`):
+
+- `posix_transport` — `stream_transport_t` over a TCP socket (blocking `send`, short‑timeout
+  `recv` → `STREAM_WOULDBLOCK`) + an in‑memory `pcm_source_t`.
+- `simonsays-client` — streams a WAV to a running server via the portable `stream_client`.
+
+New test suites (22 total, all passing): `test_stream_proto`, `test_stream_client`
+(mock transport/source: mid‑stream close, end‑of‑speech terminate, session timeout, send
+failure, scratch‑too‑small guard), `test_http_ingest` (full/incremental/split/malformed —
+requests built with `stream_proto`), `test_intent`, `test_debounce`, `test_session`
+(command→debounce cut, non‑command→silence cut, and the full `stream_proto → http_ingest →
+session` data path), and **`test_server_e2e`** — a pthread loopback test that runs the
+portable client over a **real 127.0.0.1 socket** against `serverlib` and asserts the client
+sees `FSM_EV_SERVER_CLOSED` because the server recognised a command and cut on
+`CUT_DEBOUNCE`.
+
+**What remains for the device** is purely hardware glue that cannot be host‑tested: an
+lwip‑socket `stream_transport_t`, an I2S‑mic `pcm_source_t`, and Wi‑Fi bring‑up in
+`hook_connect`. The `hook_stream`/`hook_connect` stubs in `app_main.c` document exactly how
+to plug the tested `stream_client_run` in. The server's `stt_stub` is swapped for
+whisper.cpp behind the same `stt_backend_t`.
+
+### 13.7 Deferred to later phases
+
+Real recorded datasets, on‑device Wi‑Fi + lwip socket transport + I2S mic capture, the
+whisper.cpp STT backend (behind the existing `stt_backend_t`), the Podman pod packaging for
+the server, and the ESP‑IDF hardware build remain the outstanding integration steps. The
+training framework (Phase 3) produces deployable int8 weights today; wiring a trained
+`kws_model_data.h` into `app_main` and capturing real audio are the remaining device tasks.
 

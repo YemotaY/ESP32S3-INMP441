@@ -36,7 +36,10 @@ static fsm_event_t hook_run_kws(void *user)
 static fsm_event_t hook_connect(void *user)
 {
     (void)user;
-    /* TODO Phase 4: bring up Wi-Fi (restore channel/BSSID from RTC) + open stream. */
+    /* Phase 4: the server side is implemented and tested (see server/ and the
+     * e2e loopback test). On-device this must bring up Wi-Fi (restoring the
+     * cached channel/BSSID from RTC for a fast reconnect) and open the TCP
+     * socket that hook_stream's transport will use. Hardware glue, still stubbed. */
     ESP_LOGI(TAG, "CONNECT: (stub) connected");
     return FSM_EV_CONNECTED;
 }
@@ -44,7 +47,16 @@ static fsm_event_t hook_connect(void *user)
 static fsm_event_t hook_stream(void *user)
 {
     (void)user;
-    /* TODO Phase 4: stream PCM until the server closes the connection. */
+    /* Phase 4 landed the portable streaming engine in core/net/stream_client:
+     *   fsm_event_t ev = stream_client_run(&cfg, &transport, &mic_source,
+     *                                      scratch, sizeof(scratch));
+     * It emits chunked-HTTP frames and returns FSM_EV_SERVER_CLOSED once the
+     * server debounces the command and cuts the connection. The remaining
+     * device work is to supply two injected backends:
+     *   - stream_transport_t over an lwip TCP socket (blocking send, non-blocking
+     *     recv -> STREAM_WOULDBLOCK), and
+     *   - pcm_source_t reading 20 ms frames from the I2S mic (0 = end of speech).
+     * Both are host-untestable hardware glue, hence still stubbed here. */
     ESP_LOGI(TAG, "STREAM: (stub) streaming, server closed");
     vTaskDelay(pdMS_TO_TICKS(500));
     return FSM_EV_SERVER_CLOSED;
