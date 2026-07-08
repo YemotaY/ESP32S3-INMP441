@@ -25,6 +25,7 @@ add_library(core STATIC
     firmware/core/src/dsp/fft.c
     firmware/core/src/dsp/melspec.c
     firmware/core/src/kws.c
+    firmware/core/src/kws_model.c
 )
 target_include_directories(core PUBLIC firmware/core/include)
 target_link_libraries(core PUBLIC m)

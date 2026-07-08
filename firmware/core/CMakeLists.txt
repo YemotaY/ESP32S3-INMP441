@@ -10,6 +10,7 @@ idf_component_register(
         "src/dsp/fft.c"
         "src/dsp/melspec.c"
         "src/kws.c"
+        "src/kws_model.c"
     INCLUDE_DIRS
         "include"
 )
