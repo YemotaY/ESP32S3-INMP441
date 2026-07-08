@@ -2,12 +2,15 @@
 
 Architecture & implementation plan.
 
-> Status: **Phases 1–2 implemented.** The portable core (state machine, ring buffer,
-> power/sleep abstraction, session runner) **plus the numeric wake‑word stack** (int8
-> TFLite‑compatible quant/kernels, radix‑2 FFT, log‑mel front‑end, MLP forward + wake
-> decision) are implemented as **host‑testable C** with a passing local suite (9 suites).
-> A host **WAV simulator** runs the exact device DSP over real audio. Firmware/server glue
-> and trained weights follow the roadmap in §11.
+> Status: **Phases 1–3 implemented.** The portable core (state machine, ring buffer,
+> power/sleep abstraction, session runner), the numeric wake‑word stack (int8
+> TFLite‑compatible quant/kernels, radix‑2 FFT, log‑mel front‑end, DS‑CNN forward + wake
+> decision), **and the off‑device training/quantization/codegen framework** are
+> implemented as **host‑testable code** with a passing local suite (15 suites: 10 C, 5
+> Python). A host **WAV simulator** runs the exact device DSP over real audio, and a
+> committed **C↔Python parity fixture** proves the on‑device C engine reproduces the
+> off‑device Python int8 reference **bit‑for‑bit**. Firmware/server glue and real trained
+> weights follow the roadmap in §11.
 
 ### Confirmed build constraints (from user)
 
@@ -557,10 +560,62 @@ DSP against analytic FFT cases (impulse/DC/Nyquist/roundtrip) and tone‑band lo
 KWS with a hand‑built identity MLP whose outputs are exactly predictable — the
 "hand‑checked weights" parity baseline before real training.
 
-### 13.5 Deferred to later phases
+### 13.5 Phase 3 — custom training & deployment framework (implemented)
 
-Trained DS‑CNN weights + codegen (Phase 3, training framework), Wi‑Fi, HTTP streaming, and
+A self‑contained wake‑word framework (**no WakeNet, no TFLM**) under `kws-framework/`
+(Python 3 + numpy only) that trains a DS‑CNN, quantizes it to int8, and generates the C
+header the firmware runs. The critical deliverable is **bit‑exact C↔Python parity**.
+
+On‑device engine (added to `firmware/core/`, host‑tested):
+
+| Module | Files | Responsibility |
+|---|---|---|
+| `kws_model` | `src/kws_model.c` + `include/core/kws_model.h` | DS‑CNN runner chaining the tested int8 kernels: conv2d+ReLU → optional[depthwise+ReLU → pointwise 1×1+ReLU] → global avg‑pool → fully connected. Two static ping‑pong scratch buffers, no malloc. Driven entirely by a `kws_model_t` (weights, biases, per‑channel requant multipliers, zero‑points) emitted by codegen. |
+
+Off‑device framework (`kws-framework/kwslib/`, **not** compiled into firmware):
+
+| Module | Responsibility |
+|---|---|
+| `quant.py` | Bit‑exact mirror of `nn/quant.c` using Python‑int int32/int64 emulation (`math.frexp` multiplier, truncate‑toward‑zero division, gemmlowp rounding). |
+| `kernels.py` | int8 kernels mirroring `nn/kernels.c` (Python‑int accumulation, NHWC). |
+| `layers.py` | Float forward **+ analytic backward** for conv/depthwise/pointwise/global‑avgpool/dense + softmax‑cross‑entropy. |
+| `model.py` | `DSCNN` assembling the layers; forward/backward/loss/predict. He init. |
+| `optim.py` | Adam optimizer over the parameter dict. |
+| `quantize.py` | Float→int8: symmetric per‑output‑channel weights for conv/depthwise/pointwise, per‑tensor for the final dense; asymmetric per‑tensor activations from calibration; folded ReLU; global‑avgpool `1/N` folded into its requant multiplier. |
+| `infer_int8.py` | int8 inference reference mirroring `kws_model.c` stage‑for‑stage. |
+| `codegen.py` | Emits `kws_model_data.h` (designated‑initializer `kws_model_t` + `kws_model_get()`), C row‑major array flattening matching the C indexing. |
+| `features.py` | numpy log‑mel mirroring `dsp/melspec.c` for dataset building. |
+| `dataset.py` | Waveform augmentation (noise/shift/gain) + synthetic separable feature‑map generator for tests. |
+
+CLIs (`kws-framework/tools/`):
+
+- `train.py` — build dataset → train DS‑CNN → quantize → codegen `kws_model_data.h`.
+- `gen_parity_case.py` — deterministically build+quantize a model, run the Python int8
+  reference on a fixed random input, and emit the **committed golden fixture**
+  (`tests/host/generated/parity_model.h` + `parity_case.h`).
+
+New test suites (15 total, all passing):
+
+- **C:** `test_parity` includes the committed fixture and asserts `kws_model_infer`
+  reproduces the Python int8 logits exactly (`[-116, -81, -128]` for the current seed).
+- **Python:** `test_quant` (same asserted values as the C `test_quant`), `test_layers_
+  gradcheck` (finite‑difference weight grads with ReLU‑kink skipping + bias‑identity
+  checks), `test_train_learns` (trains on synthetic data, asserts loss↓ and acc→~100 %),
+  `test_quantize_codegen` (int8≈float argmax agreement, determinism, well‑formed header),
+  `test_parity_regen` (regenerating the fixture is byte‑identical + reproduces expected
+  logits). Python tests are wired into CTest, so `make test` runs C **and** Python.
+
+**Parity guarantee.** Because `quant.py`/`kernels.py`/`infer_int8.py` emulate int32/int64
+semantics exactly and share the same layer order/zero‑point/requant scheme as
+`kws_model.c`, the off‑device reference and the on‑device engine are the *same numeric
+function*. The committed fixture makes this a standing regression guard with no Python
+needed at C build time.
+
+### 13.6 Deferred to later phases
+
+Real recorded datasets, Wi‑Fi, HTTP audio streaming, the server intention detector, and
 the ESP‑IDF hardware build remain stubbed behind the injected hooks so the control flow and
-numerics are provably correct before hardware‑specific code lands. The C↔Python bit‑exact
-parity check is enabled by the TFLite‑compatible `nn/quant` math added here.
+numerics are provably correct before hardware‑specific code lands. The training framework
+(Phase 3) produces deployable int8 weights today; wiring a trained `kws_model_data.h` into
+`app_main` and capturing real audio are the remaining integration steps.
 

@@ -25,6 +25,11 @@ compile_commands.json
 *.swp
 .DS_Store
 
+# Python framework
+__pycache__/
+*.pyc
+/kws-framework/artifacts/
+
 # ESP-IDF project artifacts
 sdkconfig
 sdkconfig.old
