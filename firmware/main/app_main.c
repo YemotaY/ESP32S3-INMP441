@@ -1,9 +1,10 @@
 /* SimonSays ESP32-S3 firmware entry point.
  *
- * Phase 1 skeleton: wires the tested portable core (FSM + session runner) to the
- * ESP-IDF power backend. The audio/KWS/Wi-Fi/HTTP steps are stubbed hooks that log
- * and return placeholder results so the wake -> ... -> sleep control flow can be
- * exercised on-device before the hardware-specific code lands.
+ * Wires the tested portable core (FSM + session runner + streaming client) to the
+ * device hardware: INMP441 I2S mic capture, Wi-Fi STA, and a TCP socket transport.
+ *
+ * Flow (one cycle): wake -> confirm voice (energy gate) -> Wi-Fi + connect ->
+ * stream PCM as chunked HTTP until the server debounces a command and cuts -> sleep.
  *
  * Power mode starts at STAY_AWAKE ("at beginning without deep sleep"); switch to
  * DRYRUN to simulate the sleep cycle, or REAL for production deep sleep.
@@ -14,7 +15,11 @@
 
 #include "core/app.h"
 #include "core/power.h"
+#include "core/net/stream_client.h"
 #include "power_esp.h"
+#include "mic_i2s.h"
+#include "net_wifi.h"
+#include "net_socket.h"
 
 static const char *TAG = "simonsays";
 
@@ -23,58 +28,111 @@ static const char *TAG = "simonsays";
 #define APP_POWER_MODE POWER_MODE_STAY_AWAKE
 #endif
 
-/* --- Stub hooks (replaced in later phases by real KWS / Wi-Fi / HTTP) --- */
+/* Frame granularity: 20 ms @ 16 kHz / 16-bit mono = 320 samples = 640 bytes. */
+#define FRAME_SAMPLES 320
+#define FRAME_BYTES   (FRAME_SAMPLES * 2)
+#define FRAMES_PER_SEC (MIC_SAMPLE_RATE / FRAME_SAMPLES)
 
+/* Shared device context passed to the hooks via app_hooks_t.user. */
+typedef struct {
+    tcp_transport_ctx_t sock;   /* fd of the current session's socket */
+    mic_source_t        mic;    /* end-of-speech tracking for the stream */
+    uint8_t             scratch[FRAME_BYTES + 64];  /* header/chunk staging */
+} app_ctx_t;
+
+/* --- Hook: confirm the wake word ---
+ * Placeholder for the trained DS-CNN: capture ~0.5 s and confirm on voice energy so the
+ * device only streams when someone is actually speaking. The DS-CNN model header drops
+ * in here later without touching the state machine. */
 static fsm_event_t hook_run_kws(void *user)
 {
     (void)user;
-    /* TODO Phase 2/3: run log-mel front-end + custom DS-CNN and decide. */
-    ESP_LOGI(TAG, "KWS: (stub) confirming wake word");
-    return FSM_EV_KWS_CONFIRMED;
+    static int16_t buf[MIC_SAMPLE_RATE / 2];   /* 0.5 s */
+    size_t got = mic_i2s_read(buf, sizeof(buf) / sizeof(buf[0]), 600);
+    if (got == 0) {
+        ESP_LOGW(TAG, "KWS: mic read failed");
+        return FSM_EV_KWS_REJECTED;
+    }
+    uint32_t energy = mic_frame_energy(buf, got);
+    ESP_LOGI(TAG, "KWS: energy=%lu thresh=%d", (unsigned long)energy,
+             CONFIG_SIMONSAYS_WAKE_ENERGY);
+    return energy >= (uint32_t)CONFIG_SIMONSAYS_WAKE_ENERGY
+               ? FSM_EV_KWS_CONFIRMED : FSM_EV_KWS_REJECTED;
 }
 
+/* --- Hook: bring up Wi-Fi and open the TCP socket --- */
 static fsm_event_t hook_connect(void *user)
 {
-    (void)user;
-    /* Phase 4: the server side is implemented and tested (see server/ and the
-     * e2e loopback test). On-device this must bring up Wi-Fi (restoring the
-     * cached channel/BSSID from RTC for a fast reconnect) and open the TCP
-     * socket that hook_stream's transport will use. Hardware glue, still stubbed. */
-    ESP_LOGI(TAG, "CONNECT: (stub) connected");
+    app_ctx_t *ctx = user;
+    if (ss_wifi_connect(CONFIG_SIMONSAYS_WIFI_SSID, CONFIG_SIMONSAYS_WIFI_PASSWORD,
+                        15000) != ESP_OK) {
+        return FSM_EV_CONNECT_FAILED;
+    }
+    int fd = ss_tcp_connect(CONFIG_SIMONSAYS_SERVER_HOST, CONFIG_SIMONSAYS_SERVER_PORT);
+    if (fd < 0) {
+        ss_wifi_disconnect();
+        return FSM_EV_CONNECT_FAILED;
+    }
+    ctx->sock.fd = fd;
+    ESP_LOGI(TAG, "CONNECT: streaming to %s:%d",
+             CONFIG_SIMONSAYS_SERVER_HOST, CONFIG_SIMONSAYS_SERVER_PORT);
     return FSM_EV_CONNECTED;
 }
 
+/* --- Hook: stream PCM until the server cuts the connection --- */
 static fsm_event_t hook_stream(void *user)
 {
-    (void)user;
-    /* Phase 4 landed the portable streaming engine in core/net/stream_client:
-     *   fsm_event_t ev = stream_client_run(&cfg, &transport, &mic_source,
-     *                                      scratch, sizeof(scratch));
-     * It emits chunked-HTTP frames and returns FSM_EV_SERVER_CLOSED once the
-     * server debounces the command and cuts the connection. The remaining
-     * device work is to supply two injected backends:
-     *   - stream_transport_t over an lwip TCP socket (blocking send, non-blocking
-     *     recv -> STREAM_WOULDBLOCK), and
-     *   - pcm_source_t reading 20 ms frames from the I2S mic (0 = end of speech).
-     * Both are host-untestable hardware glue, hence still stubbed here. */
-    ESP_LOGI(TAG, "STREAM: (stub) streaming, server closed");
-    vTaskDelay(pdMS_TO_TICKS(500));
-    return FSM_EV_SERVER_CLOSED;
+    app_ctx_t *ctx = user;
+
+    uint32_t hang = (CONFIG_SIMONSAYS_VAD_HANG_MS * FRAMES_PER_SEC) / 1000;
+    uint32_t maxf = (CONFIG_SIMONSAYS_MAX_UTTERANCE_MS * FRAMES_PER_SEC) / 1000;
+    mic_source_init(&ctx->mic, CONFIG_SIMONSAYS_VAD_ENERGY, hang ? hang : 1, maxf);
+
+    stream_transport_t tr = ss_tcp_transport(&ctx->sock);
+    pcm_source_t src = mic_pcm_source(&ctx->mic);
+
+    stream_client_cfg_t cfg = {
+        .proto = {
+            .path = CONFIG_SIMONSAYS_STREAM_PATH,
+            .host = CONFIG_SIMONSAYS_SERVER_HOST,
+            .session_id = CONFIG_SIMONSAYS_SESSION_ID,
+            .wake_conf_milli = 990,
+        },
+        .frame_bytes = FRAME_BYTES,
+        .max_chunks = maxf + FRAMES_PER_SEC * 5,   /* stream cap + drain budget */
+    };
+
+    fsm_event_t ev = stream_client_run(&cfg, &tr, &src, ctx->scratch, sizeof(ctx->scratch));
+    ESP_LOGI(TAG, "STREAM: %s (frames=%lu)", fsm_event_str(ev),
+             (unsigned long)ctx->mic.total_frames);
+
+    ss_tcp_close(ctx->sock.fd);
+    ctx->sock.fd = -1;
+    ss_wifi_disconnect();
+    return ev;
 }
 
 void app_main(void)
 {
     ESP_LOGI(TAG, "boot, power mode=%s", power_mode_str(APP_POWER_MODE));
 
+    ESP_ERROR_CHECK(mic_i2s_start(CONFIG_SIMONSAYS_I2S_BCLK_GPIO,
+                                  CONFIG_SIMONSAYS_I2S_WS_GPIO,
+                                  CONFIG_SIMONSAYS_I2S_DIN_GPIO,
+                                  CONFIG_SIMONSAYS_MIC_GAIN_SHIFT));
+
     power_ctrl_t power;
     power_backend_t backend = power_esp_backend();
     power_init(&power, APP_POWER_MODE, &backend);
+
+    static app_ctx_t ctx;
+    ctx.sock.fd = -1;
 
     app_hooks_t hooks = {
         .run_kws = hook_run_kws,
         .connect = hook_connect,
         .stream = hook_stream,
-        .user = NULL,
+        .user = &ctx,
     };
 
     app_t app;

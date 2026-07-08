@@ -1,0 +1,76 @@
+menu "SimonSays configuration"
+
+    config SIMONSAYS_WIFI_SSID
+        string "Wi-Fi SSID"
+        default "your-ssid"
+        help
+            SSID of the access point the daemon streams through.
+
+    config SIMONSAYS_WIFI_PASSWORD
+        string "Wi-Fi password"
+        default "your-password"
+        help
+            WPA2 passphrase for the access point.
+
+    config SIMONSAYS_SERVER_HOST
+        string "Server host (IP or hostname)"
+        default "192.168.1.10"
+        help
+            Address of the machine running simonsays-server.
+
+    config SIMONSAYS_SERVER_PORT
+        int "Server TCP port"
+        default 8080
+
+    config SIMONSAYS_STREAM_PATH
+        string "Server stream path"
+        default "/v1/stream"
+
+    config SIMONSAYS_SESSION_ID
+        string "Session id header value"
+        default "esp32s3"
+
+    menu "I2S microphone (INMP441)"
+        config SIMONSAYS_I2S_BCLK_GPIO
+            int "BCLK / SCK GPIO"
+            default 4
+
+        config SIMONSAYS_I2S_WS_GPIO
+            int "WS / LRCLK GPIO"
+            default 5
+
+        config SIMONSAYS_I2S_DIN_GPIO
+            int "DIN / SD GPIO"
+            default 6
+
+        config SIMONSAYS_MIC_GAIN_SHIFT
+            int "Mic gain (left shift bits)"
+            default 2
+            range 0 8
+            help
+                Left-shift applied to each 16-bit sample to boost the quiet INMP441.
+                0 = raw, 2-4 typical for room-level speech.
+    endmenu
+
+    menu "Voice activity / wake"
+        config SIMONSAYS_WAKE_ENERGY
+            int "Wake energy threshold (mean abs amplitude)"
+            default 350
+            help
+                A ~0.5 s capture whose mean amplitude exceeds this confirms the wake and
+                starts streaming. Placeholder for the trained DS-CNN model.
+
+        config SIMONSAYS_VAD_ENERGY
+            int "Streaming end-of-speech energy threshold"
+            default 300
+
+        config SIMONSAYS_VAD_HANG_MS
+            int "Trailing silence to end an utterance (ms)"
+            default 800
+
+        config SIMONSAYS_MAX_UTTERANCE_MS
+            int "Hard cap on a streamed utterance (ms)"
+            default 8000
+    endmenu
+
+endmenu

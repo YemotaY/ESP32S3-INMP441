@@ -2,13 +2,22 @@ idf_component_register(
     SRCS
         "app_main.c"
         "../port/esp/power_esp.c"
+        "../port/esp/mic_i2s.c"
+        "../port/esp/net_wifi.c"
+        "../port/esp/net_socket.c"
     INCLUDE_DIRS
         "."
         "../port/esp"
     REQUIRES
         core
         esp_driver_gpio
+        esp_driver_i2s
         esp_hw_support
         esp_timer
+        esp_wifi
+        esp_netif
+        esp_event
+        nvs_flash
+        lwip
         freertos
 )

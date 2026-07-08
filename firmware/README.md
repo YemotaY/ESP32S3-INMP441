@@ -49,8 +49,47 @@ The analog sound trigger drives an RTC-capable GPIO high on sound
 deep sleep — see `docs/ARCHITECTURE.md` §2.2. Optional manual button:
 `POWER_ESP_BUTTON_WAKE_GPIO`.
 
-## Stubbed in this phase
+## Hardware hooks (implemented)
 
-`hook_run_kws`, `hook_connect`, `hook_stream` are placeholders (see later roadmap phases in
-`docs/ARCHITECTURE.md` §11). The I2S/DSP/KWS/Wi-Fi/HTTP code replaces them without touching
-the state machine.
+`app_main.c` now wires the real device backends into the tested portable core:
+
+- `hook_run_kws` — captures ~0.5 s from the INMP441 and confirms on voice energy
+  (placeholder gate for the trained DS-CNN; the model header drops in without touching
+  the state machine).
+- `hook_connect` — `ss_wifi_connect()` (STA) then `ss_tcp_connect()` opens the stream
+  socket.
+- `hook_stream` — runs the portable `stream_client_run()` over `ss_tcp_transport()` +
+  `mic_pcm_source()`, streaming chunked-HTTP PCM until the server cuts the connection.
+
+Port backends live in `port/esp/`: `mic_i2s` (INMP441 I2S RX), `net_wifi` (STA bring-up),
+`net_socket` (lwip TCP transport). All are `ss_`-prefixed to avoid clashing with IDF/lwip
+symbols (`tcp_connect`, `wifi_sta_disconnect`, …).
+
+### I2S microphone wiring (INMP441)
+
+| INMP441 | ESP32-S3 GPIO | Kconfig |
+|---|---|---|
+| SCK / BCLK | **GPIO4** | `SIMONSAYS_I2S_BCLK_GPIO` |
+| WS / LRCL  | **GPIO5** | `SIMONSAYS_I2S_WS_GPIO` |
+| SD / DOUT  | **GPIO6** | `SIMONSAYS_I2S_DIN_GPIO` |
+| L/R | GND (left slot) | — |
+| VDD | 3V3 | — |
+| GND | GND | — |
+
+16 kHz / 16-bit / mono. `SIMONSAYS_MIC_GAIN_SHIFT` (default 2) boosts the quiet mic.
+
+## Configuration
+
+Set Wi-Fi credentials, the server address, the mic pins, and VAD thresholds via
+`idf.py -C firmware menuconfig` → **SimonSays configuration** (see
+`main/Kconfig.projbuild`). At minimum set `SIMONSAYS_WIFI_SSID`,
+`SIMONSAYS_WIFI_PASSWORD`, and `SIMONSAYS_SERVER_HOST`.
+
+## Flash & run
+
+```sh
+. ../esp/esp-idf/export.sh
+idf.py -C firmware -p /dev/ttyACM0 flash monitor   # port varies
+```
+
+Start the server on the host first: `./build/server/simonsays-server --port 8080`.
