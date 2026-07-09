@@ -16,10 +16,12 @@
 #include "core/app.h"
 #include "core/power.h"
 #include "core/net/stream_client.h"
+#include "core/kws_frontend.h"
 #include "power_esp.h"
 #include "mic_i2s.h"
 #include "net_wifi.h"
 #include "net_socket.h"
+#include "kws_model_data.h"
 
 static const char *TAG = "simonsays";
 
@@ -37,27 +39,45 @@ static const char *TAG = "simonsays";
 typedef struct {
     tcp_transport_ctx_t sock;   /* fd of the current session's socket */
     mic_source_t        mic;    /* end-of-speech tracking for the stream */
+    kws_frontend_t      kws;    /* trained DS-CNN wake-word front-end */
     uint8_t             scratch[FRAME_BYTES + 64];  /* header/chunk staging */
 } app_ctx_t;
 
 /* --- Hook: confirm the wake word ---
- * Placeholder for the trained DS-CNN: capture ~0.5 s and confirm on voice energy so the
- * device only streams when someone is actually speaking. The DS-CNN model header drops
- * in here later without touching the state machine. */
+ * Captures a short window, runs the trained int8 DS-CNN over its log-mel features, and
+ * confirms only when the model reports the wake class above its confidence threshold.
+ * A cheap energy floor first rejects silence so the model isn't run on room noise. */
 static fsm_event_t hook_run_kws(void *user)
 {
-    (void)user;
-    static int16_t buf[MIC_SAMPLE_RATE / 2];   /* 0.5 s */
-    size_t got = mic_i2s_read(buf, sizeof(buf) / sizeof(buf[0]), 600);
-    if (got == 0) {
-        ESP_LOGW(TAG, "KWS: mic read failed");
+    app_ctx_t *ctx = user;
+    static int16_t buf[KWS_FE_MAX_FRAMES * KWS_FE_FRAME_STEP + KWS_FE_FRAME_LEN];
+
+    size_t need = kws_frontend_need_samples(&ctx->kws);
+    if (need > sizeof(buf) / sizeof(buf[0])) {
+        ESP_LOGE(TAG, "KWS: capture buffer too small (%zu)", need);
         return FSM_EV_KWS_REJECTED;
     }
+    size_t got = mic_i2s_read(buf, need, 600);
+    if (got < need) {
+        ESP_LOGW(TAG, "KWS: short mic read (%zu/%zu)", got, need);
+        return FSM_EV_KWS_REJECTED;
+    }
+
     uint32_t energy = mic_frame_energy(buf, got);
-    ESP_LOGI(TAG, "KWS: energy=%lu thresh=%d", (unsigned long)energy,
-             CONFIG_SIMONSAYS_WAKE_ENERGY);
-    return energy >= (uint32_t)CONFIG_SIMONSAYS_WAKE_ENERGY
-               ? FSM_EV_KWS_CONFIRMED : FSM_EV_KWS_REJECTED;
+    if (energy < (uint32_t)CONFIG_SIMONSAYS_WAKE_ENERGY) {
+        ESP_LOGI(TAG, "KWS: silence (energy=%lu < %d)", (unsigned long)energy,
+                 CONFIG_SIMONSAYS_WAKE_ENERGY);
+        return FSM_EV_KWS_REJECTED;
+    }
+
+    kws_result_t res;
+    if (!kws_frontend_run(&ctx->kws, buf, got, &res)) {
+        ESP_LOGW(TAG, "KWS: inference failed");
+        return FSM_EV_KWS_REJECTED;
+    }
+    ESP_LOGI(TAG, "KWS: class=%d conf=%.2f wake=%d (energy=%lu)",
+             res.class_id, res.confidence, res.is_wake, (unsigned long)energy);
+    return res.is_wake ? FSM_EV_KWS_CONFIRMED : FSM_EV_KWS_REJECTED;
 }
 
 /* --- Hook: bring up Wi-Fi and open the TCP socket --- */
@@ -127,6 +147,13 @@ void app_main(void)
 
     static app_ctx_t ctx;
     ctx.sock.fd = -1;
+    if (!kws_frontend_init(&ctx.kws, kws_model_get(), MIC_SAMPLE_RATE)) {
+        ESP_LOGE(TAG, "KWS front-end init failed (model geometry too large)");
+        abort();
+    }
+    ESP_LOGI(TAG, "KWS model ready: %dx%d feats, %d classes, %zu samples/window",
+             kws_model_get()->in_h, kws_model_get()->in_w,
+             kws_model_get()->num_classes, kws_frontend_need_samples(&ctx.kws));
 
     app_hooks_t hooks = {
         .run_kws = hook_run_kws,

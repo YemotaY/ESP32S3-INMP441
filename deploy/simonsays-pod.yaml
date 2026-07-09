@@ -1,0 +1,45 @@
+# SimonSays server as a Podman pod (Kubernetes-style manifest for `podman play kube`).
+#
+#   podman build -f deploy/Containerfile -t localhost/simonsays-server:latest .
+#   podman play kube deploy/simonsays-pod.yaml
+#   podman play kube --down deploy/simonsays-pod.yaml     # tear down
+#
+# The pod exposes the server on host port 8080 so the ESP32-S3 can stream to it.
+# For whisper, build the :whisper image, mount a model, and override args (see comments).
+apiVersion: v1
+kind: Pod
+metadata:
+  name: simonsays
+  labels:
+    app: simonsays
+spec:
+  restartPolicy: Always
+  containers:
+    - name: server
+      image: localhost/simonsays-server:latest
+      # Scripted-stub demo. For whisper replace args and mount the model volume below:
+      #   args: ["--whisper-model", "/models/ggml-base.en.bin"]
+      args: ["--script", "light on", "--script", "light off"]
+      ports:
+        - containerPort: 8080
+          hostPort: 8080
+          protocol: TCP
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop:
+            - ALL
+      resources:
+        limits:
+          memory: "512Mi"
+      # Uncomment to serve a whisper model from the host:
+      # volumeMounts:
+      #   - name: models
+      #     mountPath: /models
+      #     readOnly: true
+  # volumes:
+  #   - name: models
+  #     hostPath:
+  #       path: ./models
+  #       type: Directory

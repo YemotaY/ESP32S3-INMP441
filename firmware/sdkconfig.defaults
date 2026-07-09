@@ -17,4 +17,8 @@ CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 # Default logging
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
 
+# The wake-word front-end runs the log-mel DSP (512-pt FFT) + DS-CNN in the main task,
+# which needs well over the 3.5 KB default stack. Give the app task room to spare.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
+
 # No PSRAM on the default board: SPIRAM intentionally left disabled.

@@ -11,6 +11,7 @@ idf_component_register(
         "src/dsp/melspec.c"
         "src/kws.c"
         "src/kws_model.c"
+        "src/kws_frontend.c"
         "src/net/stream_proto.c"
         "src/net/stream_client.c"
     INCLUDE_DIRS

@@ -74,6 +74,7 @@ def generate(qm: dict, symbol: str = "g_kws_model") -> str:
     out.append(f"    .in_zp = {qm['in_zp']}, .conv_zp = {qm['conv_zp']}, "
                f".dw_zp = {qm['dw_zp']}, .pw_zp = {qm['pw_zp']},\n")
     out.append(f"    .gap_zp = {qm['gap_zp']}, .out_zp = {qm['out_zp']},\n")
+    out.append(f"    .in_scale = {f(qm['in_scale'])},\n")
     out.append(f"    .out_scale = {f(qm['out_scale'])}, "
                f".wake_class = {qm['wake_class']}, .threshold = {f(qm['threshold'])},\n")
     out.append("};\n\n")

@@ -65,6 +65,10 @@ typedef struct {
     /* Zero points for each stage's output. */
     int32_t in_zp, conv_zp, dw_zp, pw_zp, gap_zp, out_zp;
 
+    /* Input quantisation scale (float feature -> int8: q = round(x/in_scale)+in_zp).
+     * Emitted by codegen; used by the on-device front-end, not by kws_model_infer. */
+    float in_scale;
+
     /* Output dequant scale + wake config for kws_decide(). */
     float out_scale;
     int   wake_class;

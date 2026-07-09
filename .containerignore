@@ -1,0 +1,12 @@
+# Ignore everything the container build does not need, keeping the build context small
+# and the image reproducible. The build only needs the C sources + CMake files.
+.git
+build/
+esp/
+firmware/build/
+**/__pycache__/
+*.o
+*.a
+*.bin
+*.elf
+kws-framework/artifacts/

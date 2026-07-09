@@ -32,6 +32,7 @@ static const kws_model_t g_parity_model = {
     .fc_w = fc_w, .fc_b = fc_b, .fc_mult = 1713027436, .fc_shift = -7, .num_classes = 3,
     .in_zp = -71, .conv_zp = -128, .dw_zp = -128, .pw_zp = -128,
     .gap_zp = -128, .out_zp = 127,
+    .in_scale = 1.45271207e-02f,
     .out_scale = 8.14831310e-03f, .wake_class = 1, .threshold = 5.00000000e-01f,
 };
 

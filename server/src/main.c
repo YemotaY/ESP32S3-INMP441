@@ -5,12 +5,13 @@
  * runs the session pipeline, and closes the socket when the debounce logic decides the
  * command is finished -- which is exactly what makes the ESP32 go back to sleep.
  *
- * STT is stubbed here (no whisper.cpp dependency): pass `--script "light on"` (repeatable)
- * to feed the stub scripted transcripts, emitted per VAD-detected utterance, so the full
- * loop can be demonstrated end-to-end. Swap in a whisper.cpp backend behind stt_backend_t
- * for real recognition.
+ * STT is stubbed by default (no whisper.cpp dependency): pass `--script "light on"`
+ * (repeatable) to feed the stub scripted transcripts, emitted per VAD-detected utterance,
+ * so the full loop can be demonstrated end-to-end. For real recognition, build with
+ * -DSIMONSAYS_WITH_WHISPER=ON and pass `--whisper-model model.bin` to swap in the
+ * whisper.cpp backend behind the same stt_backend_t interface.
  *
- * Usage: simonsays-server [--port N] [--script TEXT]...
+ * Usage: simonsays-server [--port N] [--script TEXT]... [--whisper-model PATH]
  */
 #include <arpa/inet.h>
 #include <errno.h>
@@ -27,6 +28,7 @@
 #include "server/http_ingest.h"
 #include "server/session.h"
 #include "server/stt.h"
+#include "server/stt_whisper.h"
 
 #define MAX_SCRIPTS 16
 
@@ -117,6 +119,7 @@ int main(int argc, char **argv)
     int port = 8080;
     const char *scripts[MAX_SCRIPTS];
     size_t n_scripts = 0;
+    const char *whisper_model = NULL;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
@@ -125,8 +128,12 @@ int main(int argc, char **argv)
             if (n_scripts < MAX_SCRIPTS) {
                 scripts[n_scripts++] = argv[++i];
             }
+        } else if (strcmp(argv[i], "--whisper-model") == 0 && i + 1 < argc) {
+            whisper_model = argv[++i];
         } else {
-            fprintf(stderr, "usage: %s [--port N] [--script TEXT]...\n", argv[0]);
+            fprintf(stderr,
+                    "usage: %s [--port N] [--script TEXT]... [--whisper-model PATH]\n",
+                    argv[0]);
             return 2;
         }
     }
@@ -154,6 +161,21 @@ int main(int argc, char **argv)
     printf("simonsays-server listening on :%d (%zu scripted transcripts)\n",
            port, n_scripts);
 
+    /* One whisper context is loaded up front and shared across connections (reset per
+     * session). Falls back to the scripted stub if disabled or the model fails to load. */
+    stt_whisper_t whisper;
+    int use_whisper = 0;
+    if (whisper_model) {
+        if (stt_whisper_init(&whisper, whisper_model, 16000, 500, 4800, 1600) == 0) {
+            use_whisper = 1;
+            printf("STT backend: whisper.cpp (%s)\n", whisper_model);
+        } else {
+            fprintf(stderr, "whisper: failed to load '%s' (built without "
+                            "SIMONSAYS_WITH_WHISPER?); using scripted stub\n",
+                    whisper_model);
+        }
+    }
+
     session_cfg_t cfg = server_default_session_cfg();
     for (;;) {
         int fd = accept(srv, NULL, NULL);
@@ -164,9 +186,16 @@ int main(int argc, char **argv)
             perror("accept");
             break;
         }
-        stt_stub_t stub;
-        stt_stub_init(&stub, scripts, n_scripts, 500, 4800, 1600);
-        handle_conn(fd, cfg, stt_stub_backend(&stub));
+        if (use_whisper) {
+            handle_conn(fd, cfg, stt_whisper_backend(&whisper));
+        } else {
+            stt_stub_t stub;
+            stt_stub_init(&stub, scripts, n_scripts, 500, 4800, 1600);
+            handle_conn(fd, cfg, stt_stub_backend(&stub));
+        }
+    }
+    if (use_whisper) {
+        stt_whisper_free(&whisper);
     }
     close(srv);
     return 0;

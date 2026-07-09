@@ -53,9 +53,11 @@ deep sleep — see `docs/ARCHITECTURE.md` §2.2. Optional manual button:
 
 `app_main.c` now wires the real device backends into the tested portable core:
 
-- `hook_run_kws` — captures ~0.5 s from the INMP441 and confirms on voice energy
-  (placeholder gate for the trained DS-CNN; the model header drops in without touching
-  the state machine).
+- `hook_run_kws` — captures one wake window from the INMP441 and runs the **trained int8
+  DS-CNN** over its log-mel features (`core/kws_frontend`), confirming only when the model
+  reports the wake class above its confidence threshold. A cheap energy floor
+  (`SIMONSAYS_WAKE_ENERGY`) rejects silence before the model runs. The model weights live
+  in `main/kws_model_data.h`, codegen'd from the training framework (see below).
 - `hook_connect` — `ss_wifi_connect()` (STA) then `ss_tcp_connect()` opens the stream
   socket.
 - `hook_stream` — runs the portable `stream_client_run()` over `ss_tcp_transport()` +
@@ -64,6 +66,25 @@ deep sleep — see `docs/ARCHITECTURE.md` §2.2. Optional manual button:
 Port backends live in `port/esp/`: `mic_i2s` (INMP441 I2S RX), `net_wifi` (STA bring-up),
 `net_socket` (lwip TCP transport). All are `ss_`-prefixed to avoid clashing with IDF/lwip
 symbols (`tcp_connect`, `wifi_sta_disconnect`, …).
+
+> The log-mel front-end (512-pt FFT) plus DS-CNN run in the main task, so
+> `sdkconfig.defaults` raises `CONFIG_ESP_MAIN_TASK_STACK_SIZE` to 16 KB.
+
+### Wake-word model (trained DS-CNN)
+
+The wake model is trained and quantized off-device by the framework in `kws-framework/`,
+then codegen'd to a C header consumed verbatim by the firmware and the host parity test:
+
+```sh
+python kws-framework/tools/train.py --epochs 80 --out firmware/main/kws_model_data.h
+```
+
+`main/kws_model_data.h` defines `kws_model_get()` (a `kws_model_t`). The demo model ships
+trained on a synthetic separable dataset — retrain on real recorded wake-word features
+(same `(X, y)` interface) for production. The C engine reproduces the Python reference
+bit-for-bit (`tests/host/test_parity.c`), and `tests/host/test_kws_frontend.c` exercises
+the full PCM→log-mel→int8→decision path.
+
 
 ### I2S microphone wiring (INMP441)
 

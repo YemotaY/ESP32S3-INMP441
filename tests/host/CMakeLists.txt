@@ -46,6 +46,12 @@ target_include_directories(test_parity PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/gener
 target_link_libraries(test_parity PRIVATE core testsupport)
 add_test(NAME test_parity COMMAND test_parity)
 
+# Wake-word front-end: PCM -> log-mel -> int8 DS-CNN over the committed parity model.
+add_executable(test_kws_frontend test_kws_frontend.c)
+target_include_directories(test_kws_frontend PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/generated)
+target_link_libraries(test_kws_frontend PRIVATE core testsupport)
+add_test(NAME test_kws_frontend COMMAND test_kws_frontend)
+
 # Python framework tests (self-checking scripts). Wired in only if python3 is available.
 find_program(PYTHON3_EXECUTABLE NAMES python3 python)
 if(PYTHON3_EXECUTABLE)

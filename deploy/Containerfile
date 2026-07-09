@@ -1,0 +1,61 @@
+# SimonSays STT/intent/debounce server -- container image.
+#
+# Multi-stage: build the host C server with CMake, then ship a slim runtime image with
+# just the static binary. The default image builds the scripted-stub server (no whisper);
+# enable whisper.cpp with --build-arg WITH_WHISPER=1 (adds the build + runtime deps).
+#
+# Build (from repo root):
+#   podman build -f deploy/Containerfile -t simonsays-server:latest .
+#   podman build -f deploy/Containerfile --build-arg WITH_WHISPER=1 -t simonsays-server:whisper .
+#
+# Run:
+#   podman run --rm -p 8080:8080 simonsays-server:latest --script "light on"
+
+# ---------- build stage ----------
+FROM docker.io/library/debian:bookworm-slim AS build
+
+ARG WITH_WHISPER=0
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential cmake git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+COPY . .
+
+# Optionally fetch + build whisper.cpp and install it as a shared lib the server links to.
+RUN if [ "$WITH_WHISPER" = "1" ]; then \
+        git clone --depth 1 https://github.com/ggerganov/whisper.cpp /tmp/whisper && \
+        cmake -S /tmp/whisper -B /tmp/whisper/build \
+              -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON \
+              -DWHISPER_BUILD_EXAMPLES=OFF -DWHISPER_BUILD_TESTS=OFF && \
+        cmake --build /tmp/whisper/build -j"$(nproc)" && \
+        cmake --install /tmp/whisper/build --prefix /usr/local ; \
+    fi
+
+# Configure + build only the server target (skip the ESP-IDF firmware, which is separate).
+RUN cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+        $( [ "$WITH_WHISPER" = "1" ] && echo "-DSIMONSAYS_WITH_WHISPER=ON -DWHISPER_ROOT=/usr/local" ) \
+    && cmake --build build --target simonsays-server -j"$(nproc)"
+
+# ---------- runtime stage ----------
+FROM docker.io/library/debian:bookworm-slim AS runtime
+
+ARG WITH_WHISPER=0
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libstdc++6 libgomp1 \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --system --uid 10001 --no-create-home simonsays
+
+COPY --from=build /src/build/server/simonsays-server /usr/local/bin/simonsays-server
+# Ship the whisper runtime libs when built with whisper.
+COPY --from=build /usr/local/lib/ /usr/local/lib/
+RUN ldconfig
+
+USER simonsays
+EXPOSE 8080
+
+# Override CMD args at run time (e.g. --whisper-model /models/ggml-base.en.bin).
+ENTRYPOINT ["/usr/local/bin/simonsays-server", "--port", "8080"]
+CMD ["--script", "light on"]

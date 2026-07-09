@@ -26,6 +26,7 @@ add_library(core STATIC
     firmware/core/src/dsp/melspec.c
     firmware/core/src/kws.c
     firmware/core/src/kws_model.c
+    firmware/core/src/kws_frontend.c
     firmware/core/src/net/stream_proto.c
     firmware/core/src/net/stream_client.c
 )
