@@ -12,6 +12,8 @@ build/
 *.map
 /docs/
 docs/
+docs/ARCHITECTURE.md
+docs
 
 # CMake
 CMakeCache.txt
