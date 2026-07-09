@@ -10,8 +10,6 @@ The design principle throughout is a **portable core** (`firmware/core/`) that i
 both for the device and for host unit tests, so the on-device numeric path is validated on
 a normal computer and proven bit-for-bit identical to the off-device training reference.
 
-License: [MIT](LICENSE). Detailed design notes: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
-
 ---
 
 ## Contents
@@ -81,7 +79,6 @@ test drives the real portable client over a TCP socket into the server.
 ├── tests/host/              Host unit tests + committed C↔Python parity fixture
 ├── tools/host/               WAV simulator + POSIX transport + demo client
 ├── deploy/                   Containerfile, pod manifest, deployment README
-├── docs/ARCHITECTURE.md      Full design document
 ├── CMakeLists.txt            Host build (core + server + tools + tests)
 └── Makefile                  make test / build / clean
 ```
@@ -136,9 +133,6 @@ idf.py -C firmware -p /dev/ttyACM0 flash monitor
 | L/R | GND (left slot) | — |
 | VDD | 3V3 | — |
 | GND | GND | — |
-
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) §2 for the deep-sleep / analog-trigger
-rationale.
 
 ---
 
@@ -272,8 +266,6 @@ Not yet done / left as follow-ups:
 - The analog sound-trigger wake sensor for true low-power deep sleep (firmware supports
   `REAL` mode; the digital I²S mic cannot itself wake the CPU from deep sleep).
 - The debug/visualisation dashboard described in the architecture document.
-
-The status line in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) tracks the same roadmap.
 
 ---
 
