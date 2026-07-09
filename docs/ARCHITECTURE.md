@@ -2,18 +2,21 @@
 
 Architecture & implementation plan.
 
-> Status: **Phases 1–4 implemented.** The portable core (state machine, ring buffer,
+> Status: **Phases 1–6 implemented.** The portable core (state machine, ring buffer,
 > power/sleep abstraction, session runner), the numeric wake‑word stack (int8
 > TFLite‑compatible quant/kernels, radix‑2 FFT, log‑mel front‑end, DS‑CNN forward + wake
-> decision), the off‑device training/quantization/codegen framework, **and the full
+> decision), the off‑device training/quantization/codegen framework, the full
 > streaming loop (chunked‑HTTP client + socket server with VAD/STT/intent/debounce
-> connection‑cut)** are implemented as **host‑testable code** with a passing local suite
-> (22 suites: 17 C, 5 Python). A host **WAV simulator** runs the exact device DSP over
-> real audio, a committed **C↔Python parity fixture** proves the on‑device C engine
-> reproduces the off‑device Python int8 reference **bit‑for‑bit**, and an **end‑to‑end
-> loopback test** drives the portable streaming client over a real TCP socket into the
-> server and asserts the wake→stream→cut loop. Real trained weights and on‑device
-> Wi‑Fi/socket/mic glue follow the roadmap in §11.
+> connection‑cut), the **device integration** (INMP441 I²S capture, Wi‑Fi STA, lwip TCP
+> transport), the **trained DS‑CNN wired into the on‑device wake hook**, a **whisper.cpp
+> STT backend** behind the pluggable interface, and **container packaging** are
+> implemented, with a passing local suite (23 suites: 18 C, 5 Python). A host **WAV
+> simulator** runs the exact device DSP over real audio, a committed **C↔Python parity
+> fixture** proves the on‑device C engine reproduces the off‑device Python int8 reference
+> **bit‑for‑bit**, and an **end‑to‑end loopback test** drives the portable streaming
+> client over a real TCP socket into the server and asserts the wake→stream→cut loop.
+> Remaining follow‑ups (training on real audio, the analog deep‑sleep wake sensor, and the
+> dashboard) are tracked in §11.
 
 ### Confirmed build constraints (from user)
 
